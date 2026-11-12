@@ -1,0 +1,12 @@
+# dữ liệu cá nhân, không đưa lên git
+config.json
+session.json
+Nhật ký/
+Báo cáo/
+*.log
+__pycache__/
+*.pyc
+build/
+dist/
+*.spec
+.venv/
