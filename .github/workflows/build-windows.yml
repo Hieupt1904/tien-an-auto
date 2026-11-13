@@ -44,15 +44,7 @@ jobs:
           path: dist/TienAn.exe
           if-no-files-found: error
 
-      - name: Gan vao Release (khi co tag v*)
-        if: startsWith(github.ref, 'refs/tags/v')
-        uses: softprops/action-gh-release@v2
-        with:
-          files: dist/TienAn.exe
-          generate_release_notes: true
-
-  # Job rieng: kiem vien o THAT bang LibreOffice tren Windows.
-  # Tach ra de khong lam cham viec dong goi .exe.
+  # Job rieng: kiem vien o THAT bang LibreOffice. Chay song song voi build.
   verify-borders:
     runs-on: ubuntu-latest
     steps:
@@ -72,3 +64,34 @@ jobs:
         env:
           PYTHONIOENCODING: utf-8
         run: python tests/test_borders.py
+
+  # Phat hanh: CHI chay khi CA HAI job tren deu thanh cong.
+  # Truoc day buoc phat hanh nam trong job build nen co the day .exe len
+  # Release truoc khi verify-borders kip ket luan (va van o do du no fail).
+  release:
+    needs: [build, verify-borders]
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Tai artifact da build
+        uses: actions/download-artifact@v4
+        with:
+          name: TienAn-windows
+          path: dist
+
+      - name: Xac nhan co dung file .exe
+        run: |
+          set -euo pipefail
+          ls -l dist
+          test -f dist/TienAn.exe
+          head -c 2 dist/TienAn.exe | grep -q "MZ"
+          echo "Da xac nhan dist/TienAn.exe la file PE (MZ header)"
+
+      - name: Gan vao Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/TienAn.exe
+          generate_release_notes: true
+          fail_on_unmatched_files: true
