@@ -176,6 +176,33 @@ class Template:
             out = rec(DIMENSIONS, struct.pack("<IIHHH", 0, n_rows, 0, n_cols, 0)) + out
         return out
 
+    def title_blob_labels(self, label_map):
+        """Doi nhan ngay tren dong tieu de (vd "Ngày 02-11" -> "Ngày 02-10").
+
+        label_map: {cot: chuoi moi}. Cot khong co trong map giu nguyen.
+        """
+        if not label_map:
+            return self.title_blob
+        blob = self.title_blob
+        out = b""
+        pos = 0
+        while pos + 4 <= len(blob):
+            rid, ln = struct.unpack("<HH", blob[pos:pos + 4])
+            body = blob[pos + 4:pos + 4 + ln]
+            if rid == LABELSST and len(body) >= 10:
+                r, c, xf, sid = struct.unpack("<HHHI", body[:10])
+                # chi doi o DONG TIEU DE NGAY (hang 2), khong dung den hang 3
+                # ("So luong" / "Thanh tien")
+                if r == 2 and c in label_map:
+                    txt = label_map[c]
+                    body = struct.pack("<HHH", r, c, xf) + _unicode_field(txt)
+                    out += rec(LABEL, body)
+                    pos += 4 + ln
+                    continue
+            out += rec(rid, body)
+            pos += 4 + ln
+        return out
+
     def globals_stream(self):
         """Globals cua file mau, khong them bot.
 
@@ -478,7 +505,7 @@ def _total_formula_row(tpl, r, sources, xf, value, col):
     return rec(FORMULA, body)
 
 
-def build_stream(tpl, rows, freeze=True):
+def build_stream(tpl, rows, freeze=True, label_map=None):
     """rows: [{'name': str, 'values': {col: value}}] -> stream BIFF8 day du."""
     max_col = tpl.max_col()
     last_data = tpl.first_row + len(rows) - 1
@@ -488,7 +515,7 @@ def build_stream(tpl, rows, freeze=True):
     # "File error: data may have been lost".
     out = [tpl.globals_stream(),
            tpl.sheet_header_wide(n_rows=total_row + 1, n_cols=max_col + 1)]
-    out.append(tpl.title_blob)
+    out.append(tpl.title_blob_labels(label_map))
 
     tp = tpl.total_pair()
     q_src = [q for q, _a in tpl.day_column_map()]
@@ -521,9 +548,9 @@ def build_stream(tpl, rows, freeze=True):
     return b"".join(out)
 
 
-def write_xls(path, tpl, rows, freeze=True):
+def write_xls(path, tpl, rows, freeze=True, label_map=None):
     import _ole
-    stream = build_stream(tpl, rows, freeze)
+    stream = build_stream(tpl, rows, freeze, label_map)
     tmp = path + ".tmp"
     _ole.write_ole_workbook(tmp, stream)
     os.replace(tmp, path)

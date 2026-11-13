@@ -35,9 +35,56 @@ OUT_DIR = "Báo cáo"        # thu muc chua file ket qua (ten khong dau de Windo
 
 
 def app_dir():
+    """Thu muc chua chuong trinh (canh file .exe khi da dong goi)."""
     if getattr(sys, "frozen", False):
         return os.path.dirname(sys.executable)
     return os.path.dirname(os.path.dirname(HERE))
+
+
+BASE_DIR = app_dir()
+DATA_DIR = None          # gan trong App.__init__ (canh chuong trinh hoac APPDATA)
+
+
+def user_data_dir():
+    r"""Thu muc luu du lieu ca nhan: canh .exe neu ghi duoc, khong thi vao APPDATA.
+
+    Dat .exe trong C:\Program Files hay Desktop (co the bi chan ghi) la ly do
+    pho bien khien "nhap mat khau roi ma lan sau van hoi lai".
+    """
+    if os.name == "nt":
+        base = os.environ.get("APPDATA") or os.path.expanduser("~")
+        return os.path.join(base, "TienAnAuto")
+    base = os.environ.get("XDG_CONFIG_HOME") or os.path.expanduser("~/.config")
+    return os.path.join(base, "TienAnAuto")
+
+
+def _writable(folder):
+    try:
+        os.makedirs(folder, exist_ok=True)
+        probe = os.path.join(folder, ".write_test")
+        with open(probe, "w", encoding="utf-8") as fh:
+            fh.write("x")
+        os.remove(probe)
+        return True
+    except Exception:
+        return False
+
+
+def pick_data_dir(base):
+    """Thu muc dung de luu config/session/bao cao. Uu tien canh chuong trinh."""
+    if _writable(base):
+        return base
+    fallback = user_data_dir()
+    os.makedirs(fallback, exist_ok=True)
+    return fallback
+
+
+def data_file(name):
+    """Tim file du lieu ca nhan: canh chuong trinh truoc, roi den APPDATA."""
+    for cand in (os.path.join(BASE_DIR, name), os.path.join(user_data_dir(), name)):
+        if os.path.exists(cand):
+            return cand
+    return os.path.join(DATA_DIR, name)
 
 
 def load_config(path):
@@ -49,11 +96,17 @@ def load_config(path):
 
 
 def save_config(path, cfg):
+    """Ghi cau hinh; tra ve (ok, loi) de giao dien bao duoc cho nguoi dung."""
     try:
-        with open(path, "w", encoding="utf-8") as fh:
+        folder = os.path.dirname(path) or "."
+        os.makedirs(folder, exist_ok=True)
+        tmp = path + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as fh:
             json.dump(cfg, fh, ensure_ascii=False, indent=1)
-    except Exception:
-        pass
+        os.replace(tmp, path)
+        return True, None
+    except Exception as exc:
+        return False, str(exc)
 
 
 def find_template(base):
@@ -73,10 +126,11 @@ class App:
     def __init__(self, root):
         self.root = root
         self.base = app_dir()
-        self.cfg_path = os.path.join(self.base, CFG_NAME)
-        self.session_path = os.path.join(self.base, SESSION_NAME)
+        self.data_dir = pick_data_dir(self.base)
+        self.cfg_path = os.path.join(self.data_dir, CFG_NAME)
+        self.session_path = os.path.join(self.data_dir, SESSION_NAME)
         self.cfg = load_config(self.cfg_path)
-        self.logger = _log.Logger(self.base)
+        self.logger = _log.Logger(self.data_dir)
         self.queue = queue.Queue()
         self.worker = None
 
@@ -230,7 +284,7 @@ class App:
         self.worker.start()
 
     def open_folder(self, name):
-        folder = os.path.join(self.base, name)
+        folder = os.path.join(self.data_dir, name)
         if not os.path.isdir(folder):
             os.makedirs(folder)
         try:
@@ -309,13 +363,25 @@ class App:
                                             int(self.cfg.get("day_from") or 1),
                                             int(self.cfg.get("day_to") or 31))
         if not rows:
-            raise RuntimeError("Tháng này chưa có dữ liệu phiếu kê chợ.")
+            raise RuntimeError(
+                "Tháng %d/%d chưa có dữ liệu phiếu kê chợ.\n\n"
+                "Vào qlmn.vn kiểm tra xem đã kê phiếu chợ cho tháng này chưa."
+                % (month, year))
 
-        out_dir = os.path.join(self.base, OUT_DIR)
+        out_dir = os.path.join(self.data_dir, OUT_DIR)
         os.makedirs(out_dir, exist_ok=True)
         out_path = os.path.join(out_dir, "Quyet toan tien an Thang %02d-%d.xls" % (month, year))
-        _xlsio.write_xls(out_path, tpl, rows)
+        _xlsio.write_xls(out_path, tpl, rows,
+                         label_map=getattr(_report.build_rows, "last_label_map", None))
 
+        # canh bao khi so ngay nhieu hon so cot cua khuon (khuon mau chi co san
+        # mot so cot ngay; ngay du ra se khong duoc ghi)
+        so_cot = len(tpl.day_column_map())
+        if len(used_days) > so_cot:
+            pulled.warnings.append(
+                "Khuôn mẫu chỉ có %d cột ngày, tháng này có %d ngày: %d ngày cuối "
+                "không được ghi vào file." % (so_cot, len(used_days),
+                                              len(used_days) - so_cot))
         self.cfg["last_file"] = out_path
         self.cfg["last_run"] = datetime.datetime.now().strftime("%d/%m/%Y %H:%M")
         save_config(self.cfg_path, self.cfg)
@@ -387,7 +453,14 @@ class SettingsDialog:
         cfg["warehouse"] = self.var_wh.get().strip() or "2"
         cfg["day_from"] = self.var_from.get().strip() or "1"
         cfg["day_to"] = self.var_to.get().strip() or "31"
-        save_config(self.app.cfg_path, cfg)
+        ok, err = save_config(self.app.cfg_path, cfg)
+        if not ok:
+            messagebox.showerror(
+                "Không lưu được cài đặt",
+                "Không ghi được file cấu hình:\n%s\n\n%s\n\n"
+                "Hãy chuyển TienAn.exe ra Desktop hoặc một thư mục khác "
+                "rồi thử lại." % (self.app.cfg_path, err))
+            return
         self.app.refresh_labels()
         self.win.destroy()
 

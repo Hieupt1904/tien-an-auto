@@ -51,13 +51,36 @@ def build_rows(pull, template, day_from=1, day_to=31):
             continue
         by_day[d] = day
 
-    # cot ngay trong khuon, gan theo nhan "Ngày dd-mm"
+    # cot ngay trong khuon.
+    # Khuon mau chi co cot cho MOT thang (vd "Ngày 02-11" ... "Ngày 30/11").
+    # Neu thang can xuat khac thang cua khuon thi gan lai: cot thu tu duoc dung
+    # cho cac ngay lam viec THUC TE cua thang do (theo thu tu ngay tang dan).
     slots = []
-    for i, (label, pair) in enumerate(zip(template.day_labels(), template.day_column_map())):
+    pairs = template.day_column_map()
+    template_months = set()
+    parsed = []
+    for label, pair in zip(template.day_labels(), pairs):
         md = parse_day_label(label)
-        if md is None:
-            continue
-        slots.append((md[0], md[1], pair))      # (thang, ngay, (qcol, acol))
+        if md is not None:
+            template_months.add(md[0])
+            parsed.append((md[0], md[1], pair))
+    label_map = {}
+    want_months = set(d.month for d in by_day)
+    if by_day and want_months and not (want_months & template_months):
+        # thang khac khuon -> gan lai theo ngay thuc te, giu dung khoang ngay
+        days_sorted = sorted(d for d in by_day if day_from <= d.day <= day_to)
+        for i, d in enumerate(days_sorted):
+            if i < len(pairs):
+                slots.append((d.month, d.day, pairs[i]))
+                # doi nhan tren tieu de cho dung thang dang xuat
+                label_map[pairs[i][0]] = "Ngày %02d-%02d" % (d.day, d.month)
+        # cac cot con lai (ngay chua co phieu) van doi thang de khong gay hieu nham
+        if want_months:
+            mm = sorted(want_months)[0]
+            for k in range(len(days_sorted), len(pairs)):
+                label_map[pairs[k][0]] = "Ngày --%02d" % mm
+    else:
+        slots = parsed                                # (thang, ngay, (qcol, acol))
 
     # gom mat hang
     table = {}
@@ -105,6 +128,7 @@ def build_rows(pull, template, day_from=1, day_to=31):
             values[total_pair[0]] = round(qty_total, 6)
             values[total_pair[1]] = round(amount_total)
         rows.append({"name": item["name"], "values": values})
+    build_rows.last_label_map = label_map
     return rows, sorted(used)
 
 
