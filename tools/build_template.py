@@ -173,6 +173,19 @@ def main(src, out):
                 if c not in day_cols and c not in col_xf:
                     col_xf[c] = xf
 
+    # Chuan hoa XF cho MOI cot ngay (11..42).
+    # File mau chi nhap tay 5 ngay dau: cot 11/12 lay 98/110, tu cot 13 tro di
+    # la o TRONG nen mang XF 119 (khong co so "##0"). Neu giu nguyen thi khi
+    # bang co du 21 ngay, cac cot tu 13 tro di se hien so khong dinh dang
+    # (va co the tran cot -> "###"). Vi vay ep ve dung 2 kieu dung cho ca bang:
+    #   cot so luong (le)  -> XF cua cot 1  (General, Times New Roman 10)
+    #   cot thanh tien (chan) -> XF cua cot 2  (#,##0, Times New Roman 10)
+    qty_xf, amt_xf = col_xf.get(1), col_xf.get(2)
+    if qty_xf is not None and amt_xf is not None:
+        for _q, _a in [(c, c + 1) for c in sorted(day_cols)]:
+            col_xf[_q] = qty_xf
+            col_xf[_a] = amt_xf
+
     # xf la chi so trong file mau -> doi sang chi so xf cua CHINH khuon
     # (khuon xep them 5 xf mac dinh luc build_stream: 0..4, du lieu bat dau tu 5)
     # O day ta chi can giu nguyen xf vi globals giu nguyen ca bang xf cua file mau.
