@@ -30,7 +30,8 @@ CFG_NAME = "config.json"
 TPL_NAME = "template.json"
 SESSION_NAME = "session.json"
 LOG_DIR = "Nhật ký"
-OUT_DIR = "Báo cáo"
+OUT_DIR = "Báo cáo"        # thu muc chua file ket qua (ten khong dau de Windows
+                            # va git deu xu ly on dinh)
 
 
 def app_dir():

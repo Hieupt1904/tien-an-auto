@@ -19,6 +19,7 @@ NUMBER = 0x0203
 BLANK = 0x0201
 MULBLANK = 0x00BE
 LABELSST = 0x00FD
+FORMULA = 0x0006
 
 
 def rk_to_float(rk):
@@ -55,6 +56,9 @@ def cells_by_row(stream):
         elif rid == LABELSST:
             r, c, _xf, idx = struct.unpack("<HHHI", body[:10])
             out[(r, c)] = ("sst", idx)
+        elif rid == FORMULA:
+            r, c, _xf = struct.unpack("<HHH", body[:6])
+            out[(r, c)] = struct.unpack("<d", body[6:14])[0]
         pos += 4 + ln
     return out
 
@@ -64,14 +68,30 @@ def check(tpl, values, note):
     stream = _xlsio.build_stream(tpl, rows, freeze=False)
     got = cells_by_row(stream)
     r = tpl.first_row
+    tp = tpl.total_pair() or ()
     for col, want in values.items():
+        if tp and col in tp:
+            continue                            # cot TONG kiem tra rieng ben duoi
         have = got.get((r, col))
         assert have is not None, "%s: mat o (hang %d, cot %d)" % (note, r, col)
         assert abs(float(have) - float(want)) < 1e-9, \
             "%s: cot %d = %r, phai la %r" % (note, col, have, want)
-    # khong duoc co o la o cot khac trong cung hang (tru cot ten)
-    extra = [c for (rr, c) in got if rr == r and c != tpl.name_col and c not in values]
+    # khong duoc co o la o cot khac trong cung hang (tru cot ten va cap TONG,
+    # cap TONG luon co cong thuc tren moi dong du lieu)
+    want_cols = set(values) - set(tp)          # cot TONG do cong thuc sinh
+    extra = [c for (rr, c) in got
+             if rr == r and c != tpl.name_col and c not in want_cols and c not in tp]
     assert not extra, "%s: sinh them o cot %s" % (note, extra)
+    # cap cot TONG: phai co CONG THUC (khong phai so) va ket qua dung
+    if tp:
+        q_cols = [c for c, _ in tpl.day_column_map()]
+        a_cols = [c for _, c in tpl.day_column_map()]
+        for col, sources in ((tp[0], q_cols), (tp[1], a_cols)):
+            have = got.get((r, col))
+            assert have is not None, "%s: cot TONG %d thieu o" % (note, col)
+            want = sum(float(values.get(c, 0.0)) for c in sources)
+            assert abs(float(have) - want) < 1e-6, \
+                "%s: cot TONG %d = %r, phai la %r" % (note, col, have, want)
 
 
 def main():
@@ -93,7 +113,11 @@ def main():
     # cot QTY_THANH_TIEN nam sau cot thua: dam bao khong lech
     total = tpl.total_pair()
     if total:
-        check(tpl, {total[0]: 3.5, total[1]: 49000.0}, "cot TONG")
+        # cap TONG do cong thuc sinh ra tu cac cot nguon; gia tri truyen vao
+        # cho cot TONG bi bo qua (khong ghi so tho vao o cong thuc).
+        first_day = day_cols[0]
+        check(tpl, {first_day: 3.5, first_day + 1: 49000.0,
+                    total[0]: 999.0, total[1]: 999.0}, "cot TONG")
     print("OK: toa do o dung voi moi truong hop (lien tiep, le, roi rac, cot tong)")
 
 

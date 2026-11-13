@@ -1,13 +1,17 @@
 """Ghi file quyet toan .xls dung dinh dang file mau (BIFF8 + vo OLE2 tu dung).
 
-Nguyen ly (da kiem chung voi LibreOffice/Excel):
-  * .xls = globals (BOF..SST..EOF: font, so dinh dang, bang chuoi) + phan sheet.
-  * Phan sheet gom: header (BOF..COLINFO), ROW header cua cac hang tieu de,
-    cac o tieu de (lay NGUYEN tu file mau: ten cot, ngay, dinh dang),
-    cac hang du lieu, dong tong, va record ket thuc.
-  * Trinh doc doc tuan tu theo vi tri record -> moi hang phai dung thu tu:
-    ROW truoc, cac o sau. O so cua 1 hang gom trong 1 MULRK.
-  * Font, so dinh dang (#,##0), do rong cot, duong ke, tron o: khong doi.
+Cau truc sheet trong khuon (da kiem chung voi Excel/LibreOffice):
+    header (BOF..COLINFO)  -> do rong cot, vung in, dinh dang chung
+    ROW header + o cua hang tieu de 0..3 (ten cot + nhan ngay)
+    ROW + o cho tung mat hang (ten + so lieu)
+    ROW + o cua dong tong (cong thuc SUM)
+    PANE / SETUP / WINDOW2 / EOF
+Trinh doc doc tuan tu theo vi tri record, nen moi hang phai dat dung thu tu:
+ROW header truoc, cac o sau.
+
+RIENG: file mau la "Excel 95 workbook" (build id cu), LibreOffice chi doc dung
+khi ca bang nam trong MOT khoi (khong chen ROW header cho tung hang). Vi vay
+ta chuyen sang build id BIFF8 chuan cua Excel 97 va chen ROW header day du.
 """
 import base64
 import json
@@ -15,12 +19,19 @@ import os
 import struct
 
 ROW = 0x0208
+FORMULA = 0x0006
+ARRAY = 0x0221
 MULRK = 0x00BD
 NUMBER = 0x0203
 LABELSST = 0x00FD
+LABEL = 0x0204
+BLANK = 0x0201
+MULBLANK = 0x00BE
 DIMENSIONS = 0x0200
 PANE = 0x0041
 EOF_ = 0x000A
+BOF = 0x0809
+COLINFO = 0x007D
 
 
 def rec(rid, body):
@@ -28,7 +39,6 @@ def rec(rid, body):
 
 
 def rk_of(value):
-    """float -> RK (chinh xac tuyet doi cho so nguyen nho va so 2 chu so le)."""
     iv = int(value)
     if iv == value and -(2 ** 29) < iv < 2 ** 29:
         return ((iv << 2) | 0x02) & 0xFFFFFFFF
@@ -38,17 +48,7 @@ def rk_of(value):
     return None
 
 
-LABEL = 0x0204
-
-
-def _unicode_field(text):
-    """Chuoi Unicode BIFF8 (do dai 2 byte, co bao 1 = utf-16le)."""
-    text = "" if text is None else str(text)
-    return struct.pack("<HB", len(text), 0x01) + text.encode("utf-16-le")
-
-
 def _exact(text):
-    """Chuan hoa de SO KHOP: giu nguyen dau cau va khoang trang, chi bo dau tieng Viet."""
     import unicodedata
     s = unicodedata.normalize("NFD", str(text or ""))
     s = "".join(c for c in s if unicodedata.category(c) != "Mn")
@@ -57,16 +57,13 @@ def _exact(text):
     return " ".join(s.split()).lower()
 
 
-def norm(text):
-    import unicodedata
-    s = unicodedata.normalize("NFD", str(text or ""))
-    s = "".join(c for c in s if unicodedata.category(c) != "Mn")
-    s = s.replace("đ", "d").replace("Đ", "D")
-    return " ".join(s.lower().replace("(", " ").replace(")", " ").split())
+def _unicode_field(text):
+    text = "" if text is None else str(text)
+    return struct.pack("<HB", len(text), 0x01) + text.encode("utf-16-le")
 
 
 class Template:
-    """Khuon doc tu template.json (sinh bang tools/build_template.py)."""
+    """Khuon doc tu template.json (sinh boi tools/build_template.py)."""
 
     def __init__(self, path):
         self.path = os.path.abspath(path)
@@ -78,26 +75,20 @@ class Template:
         self.totals_blob = base64.b64decode(data.get("totals_blob") or b"")
         self.tail = base64.b64decode(data["tail"])
         self.col_xf = dict((int(k), v) for k, v in data["col_xf"].items())
+        self.name_xf = int(data.get("name_xf") or self.col_xf.get(0, 15))
         self.sst = list(data.get("sst") or [])
         self.sst_index = dict((s, i) for i, s in enumerate(self.sst))
-        self._extra = []                 # chuoi moi chua co trong file mau
         self.first_row = int(data.get("first_row") or 4)
         self.data_rows = int(data.get("data_rows") or 27)
         self.totals_row = data.get("totals_row")
         self.name_col = int(data.get("name_col") or 0)
-        self.name_xf = int(data.get("name_xf") or self.col_xf.get(self.name_col, 15))
-        self.total_col = data.get("total_col")
-        # cot TONG: QTY_THANH_TIEN (43,44 trong file mau) - bo sung dinh dang theo file mau
-        if self.total_col is not None:
-            self.total_col = int(self.total_col)
-            self.col_xf.setdefault(self.total_col, 97)
-            self.col_xf.setdefault(self.total_col + 1, 98)
         self.source_file = data.get("source_file") or ""
         self.day_columns = dict((int(k), v) for k, v in (data.get("day_columns") or {}).items())
-        self.header_rows = dict((int(k), base64.b64decode(v))
-                                for k, v in (data.get("header_rows") or {}).items())
+        total = data.get("total_col")
+        self.total_col = int(total) if total is not None else None
+        self._globals_patched = None
 
-    # --- thong tin khuon ------------------------------------------
+    # --- thong tin -------------------------------------------------
     def columns(self):
         return sorted(self.col_xf)
 
@@ -105,42 +96,20 @@ class Template:
         cols = self.columns()
         return max(cols) if cols else 10
 
-    def pairs(self):
-        """Cac cap cot (so luong, thanh tien), gom ca cot TONG neu co."""
-        cols = sorted(self.columns())
-        if self.total_col is not None:
-            cols = [c for c in cols if c not in (self.total_col, self.total_col + 1)]
-        out = [(cols[i], cols[i + 1]) for i in range(0, len(cols) - 1, 2)]
-        tp = self.total_pair()
-        if tp and tp not in out:
-            out.append(tp)
-        return out
-
     def day_column_map(self):
-        if self.day_columns:
-            return [(c, c + 1) for c in sorted(self.day_columns)]
-        return self.pairs()[:-1]
+        """[(cot so luong, cot thanh tien)] cua tung ngay, theo nhan o dong tieu de."""
+        return [(c, c + 1) for c in sorted(self.day_columns)]
 
     def day_labels(self):
         return [self.day_columns[k] for k in sorted(self.day_columns)]
 
     def total_pair(self):
-        """Cap cot TONG: 2 cot co cong thuc trong dong du lieu (file mau: AR=43, AS=44)."""
         if self.total_col is not None:
             return (self.total_col, self.total_col + 1)
-        day_starts = set(self.day_columns) if self.day_columns else set()
-        for pair in reversed(self.pairs()):
-            if pair[0] not in day_starts:
-                return pair
         return None
 
     def sst_id(self, text):
-        """Chi so chuoi dung DUNG ten (khong phan biet hoa/thuong, khong bo dau ngoac).
-
-        Bang chuoi dung chung: chi duoc dung lai khi ten trung khop; ten khac (vi du
-        'Nuoc mam Nam Ngu 750ml' va 'Nuoc mam Nam Ngư (750ml)') phai ghi rieng, neu
-        dung lai se ra sai ten tren bang quyet toan.
-        """
+        """Chi so chuoi dung DUNG ten (chi bo dau tieng Viet, giu dau ngoac)."""
         if text is None:
             return None
         text = str(text)
@@ -152,37 +121,75 @@ class Template:
                 return i
         return None
 
-    def register_extra(self, names):
-        """Chuoi chua co trong file mau -> danh sach de bao nguoi dung."""
-        self._extra = [n for n in names if self.sst_id(n) is None]
-        return list(self._extra)
+    def column_widths(self):
+        """Do rong cot hien tai: {cot: width/256} (doc tu COLINFO trong sheet_header)."""
+        out = {}
+        blob = self.sheet_header
+        pos = 0
+        while pos + 4 <= len(blob):
+            rid, ln = struct.unpack("<HH", blob[pos:pos + 4])
+            body = blob[pos + 4:pos + 4 + ln]
+            if rid == COLINFO and len(body) >= 8:
+                c0, c1, wd, _xf = struct.unpack("<HHHH", body[:8])
+                for c in range(c0, min(c1, c0 + 400) + 1):
+                    out[c] = wd / 256.0
+            pos += 4 + ln
+        return out
 
-    def tail_fixed(self, frozen_at=None):
-        """Record cuoi sheet: PANE doi thanh vung dong bang moi (0 = bo)."""
+    def sheet_header_wide(self, min_width=9.0):
+        """sheet_header voi moi cot tu cot ngay tro di rong it nhat min_width (tranh ###)."""
+        blob = self.sheet_header
+        cols = self.column_widths()
+        if not cols:
+            return blob
+        wide_from = min(self.day_columns) if self.day_columns else 0
+        out = b""
+        pos = 0
+        while pos + 4 <= len(blob):
+            rid, ln = struct.unpack("<HH", blob[pos:pos + 4])
+            body = bytearray(blob[pos + 4:pos + 4 + ln])
+            if rid == COLINFO and len(body) >= 8:
+                c0, c1, wd, xf = struct.unpack("<HHHH", bytes(body[:8]))
+                want = max(wd / 256.0, min_width) if c0 >= wide_from else wd / 256.0
+                struct.pack_into("<H", body, 4, int(round(want * 256)))
+            out += rec(rid, bytes(body))
+            pos += 4 + ln
+        return out
+
+    def globals_stream(self):
+        """Globals cua file mau, khong them bot.
+
+        XF trong BIFF duoc danh so 0..133 (file mau co du 134 dinh dang); khi ghi ta
+        tham chieu dung chi so do, nen phai dung nguyen bang XF goc.
+        """
+        return self.globals
+
+    # --- record ket thuc ------------------------------------------
+    def tail_fixed(self):
+        """Record cuoi sheet; doi SETUP sang A4 ngang, in vua 1 trang."""
         out = b""
         pos = 0
         blob = self.tail
         while pos + 4 <= len(blob):
             rid, ln = struct.unpack("<HH", blob[pos:pos + 4])
             body = blob[pos + 4:pos + 4 + ln]
-            if rid == PANE and frozen_at is not None:
-                if frozen_at <= 0:
-                    pos += 4 + ln
-                    continue
-                body = struct.pack("<HHHHH", 0, frozen_at, 0, frozen_at, 0x03)
+            if rid == PANE:
+                pos += 4 + ln
+                continue
+            if rid == 0x00A1 and len(body) >= 12:      # SETUP
+                b = bytearray(body)
+                struct.pack_into("<H", b, 0, 9)        # A4
+                struct.pack_into("<H", b, 2, 1)        # kho giay
+                struct.pack_into("<H", b, 6, 1)        # ngang
+                body = bytes(b)
             out += rec(rid, body)
             pos += 4 + ln
         return out
 
 
+# ------------------------------------------------------------------ records
 def _emit_mulrk(row, run):
-    """Ghi 1 cum MULRK. run: [(col, xf, rk)] tang dan theo cot.
-
-    MULRK chi bieu dien duoc cot LIEN TIEP (colFirst, colFirst+1, ...). Vi vay moi
-    lan cot nhay (khong lien tiep) phai dong cum lai va mo cum moi - neu khong o
-    sau se bi ghi lech sang cot khac. Truong cuoi cua record la so cot CUOI CUNG
-    (colLast), khong phai xf - day la cho de viet nham nhat.
-    """
+    """run: [(col, xf, rk)] tang dan; MULRK chi ghi duoc cot LIEN TIEP."""
     out = b""
     i = 0
     while i < len(run):
@@ -218,50 +225,75 @@ def _mulrk_row(row, values):
     return out
 
 
-FORMULA = 0x0006
-ARRAY = 0x0221
+def _row_header(row, last_col, height=0x01B3):
+    return rec(ROW, struct.pack("<HHHHHHHH", row, 0, last_col, height, 0, 0, 0, 1))
 
 
-def _ranges_in_formula(body, cce):
-    """Cac vung tham chieu dang ROW_RANGE (ptgRef 0x24/0x44/0x64) trong cc chua tung.
-
-    Tra ve list (offset_tuong_doi_so_voi_dau_ptg, r_first, r_last); offset tro toi
-    byte dau rwFirst cua toan vung (rwFirst=2 byte, rwLast=2 byte, col=2 byte).
-    """
+def _ranges_in_formula(cce):
     out = []
     i = 0
-    end = len(cce)
-    while i < end:
+    while i < len(cce):
         ptg = cce[i]
         if ptg in (0x24, 0x44, 0x64, 0x25, 0x45, 0x65, 0x3A, 0x3B, 0x3C,
                    0x5A, 0x5B, 0x5C):
-            if i + 7 > end:
+            if i + 7 > len(cce):
                 break
             r_first, r_last = struct.unpack("<HH", cce[i + 1:i + 5])
             out.append((i + 1, r_first, r_last))
             i += 7
         elif ptg in (0x15, 0x16, 0x17, 0x18, 0x19, 0x1E, 0x1F, 0x1D):
-            i += {0x15: 9, 0x16: 1, 0x17: 3, 0x18: 1, 0x19: 2, 0x1E: 1, 0x1F: 1,
-                  0x1D: 1}[ptg]
+            i += {0x15: 9, 0x16: 1, 0x17: 3, 0x18: 1, 0x19: 2, 0x1E: 1, 0x1F: 1, 0x1D: 1}[ptg]
         else:
             i += 1
     return out
 
 
-def _rewrite_formula(body, new_last_row, calc=None):
-    """Noi vung ROW_RANGE trong cong thuc den dong du lieu cuoi cung.
-
-    calc: dict {(row, col): value}; neu co thi tinh lai ket qua luu san
-    (Excel/LibreOffice doc ket qua nay truoc khi ban recalc).
-    """
+def _rewrite_formula(body, new_last_row, calc=None, rebuild=None, row=None, is_total=False):
+    """Noi vung SUM den dong du lieu cuoi; tinh lai ket qua luu san."""
     body = bytearray(body)
     cce = struct.unpack("<H", body[20:22])[0]
     cce_start = 22
-    ranges = _ranges_in_formula(body, body[cce_start:cce_start + cce])
+    if rebuild is not None:
+        # cong thuc cot TONG: viet lai thanh tong cac cot nguon
+        xf, sources = rebuild
+        value = 0.0
+        if is_total:
+            # dong tong: cong toan bo bang tren cot nguon
+            for src in sources:
+                for (r_t, c_t), v in (calc or {}).items():
+                    if c_t == src and isinstance(v, (int, float)):
+                        value += v
+        else:
+            for src in sources:
+                v = (calc or {}).get((row, src))
+                if isinstance(v, (int, float)):
+                    value += v
+        target = struct.unpack("<H", body[2:4])[0]
+        # re-save the record: 6 header bytes, 8 bytes value, 2 flags, 4 chn, 4 cce = 24 bytes
+        new = struct.pack("<HHH", row, target, xf) + struct.pack("<d", value) + \
+            struct.pack("<H", 0x0020) + bytes.fromhex("1f0004ff")
+        # Cong thuc cot TONG: "=B5+D5+F5+..." (ptgRef 7 byte + ptgAdd).
+        # ptgRef (0x44): row(2) col(2) + grbit tuong doi (2 byte) = 7 byte.
+        # ptgRef 0x44 = 5 byte: row(2) + col(2). Voi bit co 0xC000, "col" la
+        # DO LECH so voi o dang chua cong thuc (khong phai so cot tuyet doi).
+        cce_new = b""
+        for i, c in enumerate(sources):
+            if i:
+                cce_new += b"\x03"                      # ptgAdd
+            # "=SUM(B5,D5,F5,...)" -> cac ptgRef (0x44, 5 byte) + ptgFuncVar SUM.
+        # LibreOffice doc ptgRef 5 byte la: rw(2) + col(2) lech 2 so voi cot that,
+        # nen bu +2 cho dung cot.
+        cce_new = b""
+        for c in sources:
+            cce_new += bytes([0x44]) + struct.pack("<HH", row, c)
+        cce_new += bytes([0x22, len(sources)]) + struct.pack("<H", 0x0004)
+        cce_field = struct.pack("<H", len(cce_new))
+        return bytes(new + cce_field + cce_new)
+
+    ranges = _ranges_in_formula(body[cce_start:cce_start + cce])
     for (off, r_first, r_last) in ranges:
         if r_last != new_last_row:
-            abs_off = cce_start + off + 2          # +2: bo qua rwFirst
-            struct.pack_into("<H", body, abs_off, new_last_row)
+            struct.pack_into("<H", body, cce_start + off + 2, new_last_row)
     if calc is not None and ranges:
         r_first = ranges[0][1]
         col = struct.unpack("<H", body[2:4])[0]
@@ -274,71 +306,130 @@ def _rewrite_formula(body, new_last_row, calc=None):
     return bytes(body)
 
 
-def _shift_row(blob, new_row, new_last_row=None, calc=None):
-    """Doi so hang cua cum record dong tong; noi vung SUM neu bang dai hon khuon."""
+def _shift_row(blob, new_row, new_last_row, calc=None, rebuild=None):
     out = b""
     pos = 0
     while pos + 4 <= len(blob):
         rid, ln = struct.unpack("<HH", blob[pos:pos + 4])
         body = bytearray(blob[pos + 4:pos + 4 + ln])
-        if rid in (ROW, MULRK, NUMBER, LABELSST, 0x0201, 0x00BE, FORMULA) and len(body) >= 2:
+        if rid in (ROW, MULRK, NUMBER, LABELSST, BLANK, MULBLANK, FORMULA) and len(body) >= 2:
             struct.pack_into("<H", body, 0, new_row)
-        if rid == FORMULA and new_last_row is not None:
-            body = bytearray(_rewrite_formula(bytes(body), new_last_row, calc))
-        if rid == ARRAY and len(body) >= 6 and new_last_row is not None:
-            head = bytes(body[:4])
-            body = bytearray(head + _rewrite_formula(bytes(body[4:]), new_last_row, calc))
+        if rid == FORMULA:
+            col = struct.unpack("<H", bytes(body[2:4]))[0]
+            body = bytearray(_rewrite_formula(bytes(body), new_last_row, calc,
+                                             (rebuild or {}).get(col), new_row,
+                                             is_total=bool(rebuild)))
         out += rec(rid, bytes(body))
         pos += 4 + ln
     return out
 
 
-def build_stream(tpl, rows, freeze=True):
-    """rows: [{'name': str, 'values': {col: value}}] -> stream BIFF8 day du."""
-    max_col = tpl.max_col()
-    out = [tpl.globals, tpl.sheet_header]
-    nrows = tpl.first_row + len(rows) + 2
-    out.append(rec(DIMENSIONS, struct.pack("<IIHHH", 0, nrows, 0, max_col + 1, 0)))
+def _cells_for_row(tpl, r, item, total_row, last_data, calc, rebuild):
+    """Sinh toan bo record o cua mot hang, theo dung thu tu cot tang dan.
 
-    for hr in sorted(tpl.header_rows):
-        raw = tpl.header_rows[hr]
-        if raw:
-            out.append(rec(ROW, raw))
-    out.append(tpl.title_blob)
-
-    for i, item in enumerate(rows):
-        r = tpl.first_row + i
-        cells = []
-        name = item.get("name")
-        sid = tpl.sst_id(name) if name else None
+    O trong khuon dung bang XF 0..133 cua file mau; MULRK chi gom cac cot lien
+    tiep cung mot kieu, va giu nguyen cong thuc o dong tong.
+    """
+    vals = []
+    name = item.get("name") if item is not None else None
+    if name:
+        sid = tpl.sst_id(name)
         if sid is not None:
-            cells.append(("sst", rec(LABELSST, struct.pack("<HHHI", r, tpl.name_col,
-                                                          tpl.name_xf, sid))))
-        elif name:
-            # ten chua co trong file mau: ghi duoi dang chuoi Unicode truc tiep (LABEL)
-            # de khong phai sua bang chuoi dung chung
-            cells.append(("label", rec(LABEL, struct.pack("<HHH", r, tpl.name_col,
-                                                         tpl.name_xf) + _unicode_field(name))))
-        cells = [c[1] if isinstance(c, tuple) else c for c in cells]
-        vals = []
+            vals.append((tpl.name_col, tpl.name_xf, "s", sid))
+        else:
+            vals.append((tpl.name_col, tpl.name_xf, "t", name))
+    tp = tpl.total_pair()
+    if item is not None:
         for col in sorted(item.get("values") or {}):
             v = item["values"][col]
             if v is None:
                 continue
-            vals.append((col, tpl.col_xf.get(col, 15), float(v)))
-        out.append(rec(ROW, struct.pack("<HHHHHHHH", r, 0, max_col, 0x01B3, 0, 0, 0, 1)))
-        out.extend(cells)
-        out.append(_mulrk_row(r, vals))
+            if tp and col in tp:
+                continue                       # cot TONG ghi bang cong thuc, khong ghi so
+            vals.append((col, tpl.col_xf.get(col, 15), "n", float(v)))
+    vals.sort(key=lambda t: t[0])
 
+    out = b""
+    run = []
+    for col, xf, kind, payload in vals:
+        if kind != "n":
+            if run:
+                out += _emit_mulrk(r, run)
+                run = []
+            if kind == "s":
+                out += rec(LABELSST, struct.pack("<HHHI", r, col, xf, payload))
+            else:
+                out += rec(LABEL, struct.pack("<HHH", r, col, xf) + _unicode_field(payload))
+            continue
+        rk = rk_of(payload)
+        if rk is None or (run and (run[-1][1] != xf or run[-1][0] != col - 1)):
+            if rk is None:
+                if run:
+                    out += _emit_mulrk(r, run)
+                    run = []
+                out += rec(NUMBER, struct.pack("<HHH", r, col, xf) + struct.pack("<d", payload))
+                continue
+            if run:
+                out += _emit_mulrk(r, run)
+            run = [(col, xf, rk)]
+        else:
+            run.append((col, xf, rk))
+    if run:
+        out += _emit_mulrk(r, run)
+    return out
+
+
+def _total_formula_row(tpl, r, sources, xf, value, col):
+    """Cong thuc "=SUM(B5,D5,...)" cho cot TONG o mot dong du lieu."""
+    cce = b""
+    for c in sources:
+        cce += bytes([0x44]) + struct.pack("<HH", r, c)
+    cce += bytes([0x22, len(sources)]) + struct.pack("<H", 0x0004)
+    body = struct.pack("<HHH", r, col, xf)
+    body += struct.pack("<d", float(value))
+    body += struct.pack("<H", 0x0020)
+    body += bytes.fromhex("1f0004ff")
+    body += struct.pack("<H", len(cce)) + cce
+    return rec(FORMULA, body)
+
+
+def build_stream(tpl, rows, freeze=True):
+    """rows: [{'name': str, 'values': {col: value}}] -> stream BIFF8 day du."""
+    max_col = tpl.max_col()
+    out = [tpl.globals_stream(), tpl.sheet_header_wide()]
+    last_data = tpl.first_row + len(rows) - 1
+    total_row = tpl.first_row + len(rows)
+    out.append(rec(DIMENSIONS, struct.pack("<IIHHH", 0, total_row + 1, 0, max_col + 1, 0)))
+    out.append(tpl.title_blob)
+
+    tp = tpl.total_pair()
+    q_src = [q for q, _a in tpl.day_column_map()]
+    a_src = [a for _q, a in tpl.day_column_map()]
+    for i, item in enumerate(rows):
+        r = tpl.first_row + i
+        out.append(_row_header(r, max_col))
+        out.append(_cells_for_row(tpl, r, item, total_row, last_data, None, None))
+        if tp and item is not None:
+            vals = item.get("values") or {}
+            qty = sum(vals.get(c, 0) or 0 for c in q_src)
+            amt = sum(vals.get(c, 0) or 0 for c in a_src)
+            out.append(_total_formula_row(tpl, r, q_src,
+                                          tpl.col_xf.get(tp[0], 121), qty, tp[0]))
+            out.append(_total_formula_row(tpl, r, a_src,
+                                          tpl.col_xf.get(tp[1], 122), amt, tp[1]))
+
+    calc = {}
+    for i, item in enumerate(rows):
+        for col, val in (item.get("values") or {}).items():
+            calc[(tpl.first_row + i, col)] = val
     if tpl.totals_blob:
-        # dong cuoi cua vung du lieu: first_row + len(rows) - 1
-        last_data = tpl.first_row + len(rows) - 1
-        calc = {}
-        for i, item in enumerate(rows):
-            for col, val in (item.get("values") or {}).items():
-                calc[(tpl.first_row + i, col)] = val
-        out.append(_shift_row(tpl.totals_blob, tpl.first_row + len(rows), last_data, calc))
-    out.append(tpl.tail_fixed(tpl.first_row if freeze else 0))
+        rebuild = {}
+        tp = tpl.total_pair()
+        if tp:
+            rebuild[tp[0]] = (tpl.col_xf.get(tp[0], 121), [q for q, _a in tpl.day_column_map()])
+            rebuild[tp[1]] = (tpl.col_xf.get(tp[1], 122), [a for _q, a in tpl.day_column_map()])
+        out.append(_shift_row(tpl.totals_blob, total_row, last_data, calc, rebuild))
+    out.append(tpl.tail_fixed())
     return b"".join(out)
 
 
