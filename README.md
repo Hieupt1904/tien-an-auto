@@ -82,7 +82,16 @@ tests/                    kiểm tra không cần mạng
 Đổi mẫu Excel khác: thay file mẫu rồi chạy
 `python tools/build_template.py "file_mau.xls" src/template.json`.
 
-## Đóng gói .exe cho Windows
+## Tải bản .exe có sẵn
+
+Không muốn build? Tải **TienAn.exe** ở trang Releases:
+
+<https://github.com/Hieupt1904/tien-an-auto/releases/latest>
+
+Bản .exe được build tự động trên Windows runner của GitHub Actions mỗi khi
+push lên `master`, kèm 7 bài test và smoke test bản đóng gói.
+
+## Đóng gói .exe cho Windows (tự build)
 
 Chạy **một lần** trên máy Windows có Python 3 + mạng:
 
