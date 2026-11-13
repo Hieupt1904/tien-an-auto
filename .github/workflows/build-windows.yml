@@ -19,10 +19,12 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Cai PyInstaller
-        run: python -m pip install --upgrade pip pyinstaller
+      - name: Cai phu thuoc build + test
+        run: python -m pip install --upgrade pip pyinstaller openpyxl
 
       - name: Chay test (khong can mang)
+        env:
+          PYTHONIOENCODING: utf-8
         run: python tests/run_all.py
 
       - name: Dong goi TienAn.exe
@@ -30,6 +32,8 @@ jobs:
         run: tools\tao_exe.bat
 
       - name: Smoke test ban dong goi
+        env:
+          PYTHONIOENCODING: utf-8
         run: python tools/smoke_exe.py dist/TienAn.exe
 
       - name: Luu artifact

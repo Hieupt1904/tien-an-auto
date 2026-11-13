@@ -1,5 +1,6 @@
 import os
 import sys
+import tempfile
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "src"))
 import _api
 import _session
@@ -7,7 +8,7 @@ import _session
 api = _api.TienAnApi("u", "p")
 api.http.cookies.update({"laravel_session": "abc", "pms_route": "x"})
 api.csrf = "tok"
-path = "/tmp/session_test.json"
+path = os.path.join(tempfile.mkdtemp(), "session_test.json")
 _session.save(path, api, "u")
 data = _session.load(path, "u")
 assert data, "khong doc duoc session"
