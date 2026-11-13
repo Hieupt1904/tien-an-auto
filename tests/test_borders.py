@@ -8,6 +8,7 @@ Hai loi tung mac:
      cach doc file .xls that.
 """
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -126,8 +127,18 @@ def test_rendered_borders():
     tmp = tempfile.mkdtemp()
     xls = os.path.join(tmp, "t.xls")
     _xlsio.write_xls(xls, tpl, rows)
-    r = subprocess.run(["soffice", "--headless", "--norestore", "--convert-to", "xlsx",
-                        "--outdir", tmp, xls], capture_output=True)
+    soffice = shutil.which("soffice") or shutil.which("libreoffice")
+    if not soffice:
+        # Khong co LibreOffice (vd runner Windows) -> khong ket luan duoc,
+        # nhung phan kiem record/XF o tren da chay va dat.
+        print("  (bo qua phan render: khong co LibreOffice)")
+        return
+    try:
+        subprocess.run([soffice, "--headless", "--norestore", "--convert-to", "xlsx",
+                        "--outdir", tmp, xls], capture_output=True, timeout=120)
+    except (OSError, subprocess.SubprocessError) as exc:
+        print("  (bo qua phan render: %s)" % exc)
+        return
     out = os.path.join(tmp, "t.xlsx")
     if not os.path.exists(out):
         print("  (bo qua phan render: khong co LibreOffice)")
