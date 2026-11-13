@@ -97,6 +97,17 @@ trong thư mục `Báo cáo` ngay cạnh `TienAn.exe`.
 Lưu ý: `.exe` **phải build trên Windows**. Build trên Linux/macOS sẽ ra
 binary của hệ đó, không chạy được trên Windows.
 
+Sau khi build, kiểm tra bản đóng gói bằng:
+
+```
+python tools\smoke_exe.py dist\TienAn.exe
+```
+
+Script kiểm 3 bước và in đúng exit code: file tồn tại, `template.json` có
+trong gói và đọc được, khuôn nạp được bằng logic thật của app (`Template`).
+In ra `SMOKE_OK` là đạt. Không mở GUI — cửa sổ mở được **không** chứng minh
+template nạp thành công, nên smoke test kiểm thẳng đường nạp khuôn.
+
 Nếu muốn sửa mẫu Excel mà không build lại: đặt `template.json` cạnh
 `TienAn.exe`, chương trình sẽ dùng file đó thay cho bản đóng gói sẵn.
 
