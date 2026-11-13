@@ -82,6 +82,33 @@ tests/                    kiểm tra không cần mạng
 Đổi mẫu Excel khác: thay file mẫu rồi chạy
 `python tools/build_template.py "file_mau.xls" src/template.json`.
 
+## Đóng gói .exe cho Windows
+
+Chạy **một lần** trên máy Windows có Python 3 + mạng:
+
+```
+tools\tao_exe.bat
+```
+
+Kết quả: `dist\TienAn.exe` – **một file duy nhất**, không cần cài Python
+ở máy trường. Chép ra thư mục riêng rồi bấm đúp là chạy; file kết quả nằm
+trong thư mục `Báo cáo` ngay cạnh `TienAn.exe`.
+
+Lưu ý: `.exe` **phải build trên Windows**. Build trên Linux/macOS sẽ ra
+binary của hệ đó, không chạy được trên Windows.
+
+Nếu muốn sửa mẫu Excel mà không build lại: đặt `template.json` cạnh
+`TienAn.exe`, chương trình sẽ dùng file đó thay cho bản đóng gói sẵn.
+
+## Kiểm tra
+
+```
+python tests/run_all.py
+```
+
+Bảy bài, không cần mạng. Trong đó `test_borders.py` khoá hai lỗi từng mắc:
+ô trống không có record (mất khung kẻ) và `MULBLANK` ghi sai XF cho từng ô.
+
 ## Sự cố
 
 | Hiện tượng | Xử lý |

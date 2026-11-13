@@ -57,9 +57,14 @@ def save_config(path, cfg):
 
 
 def find_template(base):
-    for cand in (os.path.join(base, TPL_NAME), os.path.join(SRC, TPL_NAME),
-                 os.path.join(getattr(sys, "_MEIPASS", SRC), TPL_NAME)):
-        if os.path.exists(cand):
+    """Tim template.json: uu tien file dat canh .exe (de sua duoc), roi ban dong goi."""
+    cands = [os.path.join(base, TPL_NAME)]
+    if getattr(sys, "frozen", False):
+        cands.append(os.path.join(getattr(sys, "_MEIPASS", ""), TPL_NAME))
+    else:
+        cands.append(os.path.join(SRC, TPL_NAME))
+    for cand in cands:
+        if cand and os.path.exists(cand):
             return cand
     return None
 

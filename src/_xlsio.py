@@ -225,6 +225,36 @@ def _mulrk_row(row, values):
     return out
 
 
+def _emit_mulblank(row, run):
+    """run: [(col, xf)] tang dan -> BLANK le, MULBLANK (>=3 cot) khi lien tiep.
+
+    BIFF8 MULBLANK = row(2), colFirst(2), <xf(2) cho TUNG o>, colLast(2).
+    Moi o trong dai mang XF RIENG cua no (mau that: cot 13..42 la
+    119,120,119,120,... vi so luong / thanh tien dung 2 kieu khac nhau).
+    Vi vay KHONG duoc gop cac cot khac XF vao cung mot dai.
+    """
+    out = b""
+    i = 0
+    while i < len(run):
+        start = run[i][0]
+        chunk = [run[i]]
+        j = i + 1
+        while j < len(run) and run[j][0] == chunk[-1][0] + 1:
+            chunk.append(run[j])
+            j += 1
+        if len(chunk) >= 3:
+            body = struct.pack("<HH", row, start)
+            for _c, xf in chunk:
+                body += struct.pack("<H", xf)          # XF rieng cho TUNG o
+            body += struct.pack("<H", chunk[-1][0])
+            out += rec(MULBLANK, body)
+        else:
+            for c, xf in chunk:
+                out += rec(BLANK, struct.pack("<HHH", row, c, xf))
+        i = j
+    return out
+
+
 def _row_header(row, last_col, height=0x01B3):
     return rec(ROW, struct.pack("<HHHHHHHH", row, 0, last_col, height, 0, 0, 0, 1))
 
@@ -349,9 +379,38 @@ def _cells_for_row(tpl, r, item, total_row, last_data, calc, rebuild):
             vals.append((col, tpl.col_xf.get(col, 15), "n", float(v)))
     vals.sort(key=lambda t: t[0])
 
+    # O KHONG CO SO LIEU van phai ghi de giu KHUNG KE: file mau ghi MULBLANK cho
+    # toan bo cot con lai cua hang. Neu bo qua, bang se ho rong va mat vien.
+    have = dict((col, xf) for col, xf, _k, _p in vals)
+    blank_run = []
+
+    def flush_blanks():
+        nonlocal out, blank_run
+        if blank_run:
+            out += _emit_mulblank(r, blank_run)
+            blank_run = []
+
     out = b""
     run = []
-    for col, xf, kind, payload in vals:
+    for col in range(0, tpl.max_col() + 1):
+        if col not in have:
+            # cot trong: dung XF cua chinh cot do (giu vien + dinh dang)
+            if run:
+                out += _emit_mulrk(r, run)
+                run = []
+            xf = tpl.col_xf.get(col, tpl.name_xf)
+            if blank_run and (blank_run[-1][1] != xf or blank_run[-1][0] != col - 1):
+                flush_blanks()
+            blank_run.append((col, xf))
+            continue
+        if blank_run:
+            flush_blanks()
+        xf = have[col]
+        kind, payload = None, None
+        for c2, x2, k2, p2 in vals:
+            if c2 == col:
+                kind, payload = k2, p2
+                break
         if kind != "n":
             if run:
                 out += _emit_mulrk(r, run)
@@ -362,20 +421,19 @@ def _cells_for_row(tpl, r, item, total_row, last_data, calc, rebuild):
                 out += rec(LABEL, struct.pack("<HHH", r, col, xf) + _unicode_field(payload))
             continue
         rk = rk_of(payload)
-        if rk is None or (run and (run[-1][1] != xf or run[-1][0] != col - 1)):
-            if rk is None:
-                if run:
-                    out += _emit_mulrk(r, run)
-                    run = []
-                out += rec(NUMBER, struct.pack("<HHH", r, col, xf) + struct.pack("<d", payload))
-                continue
+        if rk is None:
             if run:
                 out += _emit_mulrk(r, run)
-            run = [(col, xf, rk)]
-        else:
-            run.append((col, xf, rk))
+                run = []
+            out += rec(NUMBER, struct.pack("<HHH", r, col, xf) + struct.pack("<d", payload))
+            continue
+        if run and (run[-1][1] != xf or run[-1][0] != col - 1):
+            out += _emit_mulrk(r, run)
+            run = []
+        run.append((col, xf, rk))
     if run:
         out += _emit_mulrk(r, run)
+    flush_blanks()
     return out
 
 
