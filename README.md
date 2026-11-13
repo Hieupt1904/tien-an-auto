@@ -103,10 +103,18 @@ Sau khi build, kiểm tra bản đóng gói bằng:
 python tools\smoke_exe.py dist\TienAn.exe
 ```
 
-Script kiểm 3 bước và in đúng exit code: file tồn tại, `template.json` có
-trong gói và đọc được, khuôn nạp được bằng logic thật của app (`Template`).
-In ra `SMOKE_OK` là đạt. Không mở GUI — cửa sổ mở được **không** chứng minh
-template nạp thành công, nên smoke test kiểm thẳng đường nạp khuôn.
+Script kiểm 3 bước: file tồn tại, `template.json` **rút ra từ trong gói** và
+đọc được, khuôn nạp được bằng logic thật của app (`Template`). Không mở GUI —
+cửa sổ mở được **không** chứng minh template nạp thành công.
+
+| Exit code | Nghĩa |
+|---|---|
+| `0` + `SMOKE_OK` | Đạt: gói có template và nạp được |
+| `1` | Hỏng: không có template trong gói / rút ra không được |
+| `3` | **Không kết luận được**: thiếu `pyi-archive_viewer`. Không phải đạt |
+
+Exit code `3` cố ý tách riêng: thiếu công cụ kiểm thì **không** được coi là
+qua. Cài `pip install pyinstaller` rồi chạy lại để có kết luận thật.
 
 Nếu muốn sửa mẫu Excel mà không build lại: đặt `template.json` cạnh
 `TienAn.exe`, chương trình sẽ dùng file đó thay cho bản đóng gói sẵn.

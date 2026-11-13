@@ -27,41 +27,57 @@ def fail(msg, code=1):
     sys.exit(code)
 
 
+INSPECTION_SKIP = 3          # exit code rieng: khong KET LUAN duoc (khong phai dat)
+
+
 def main():
     if len(sys.argv) < 2:
         fail("dung: python tools/smoke_exe.py <duong_dan_TienAn[.exe]>", 2)
-    exe = sys.argv[1]
+    # 0) duong dan TUYET DOI truoc khi doi cwd (buoc rut goi se cd vao temp)
+    exe = os.path.abspath(sys.argv[1])
     if not os.path.exists(exe):
         fail("khong thay file: %s" % exe)
+    if not os.path.isfile(exe):
+        fail("khong phai file: %s" % exe)
 
     print("[1] file: %s (%.1f MB)" % (exe, os.path.getsize(exe) / 1e6))
 
-    # 2. template.json phai nam trong goi va doc duoc
+    # 2) template.json PHAI nam trong goi va phai rut ra doc duoc.
+    # Thieu cong cu kiem -> KHONG duoc coi la dat (truoc day fallback im lang
+    # sang src/template.json nen file bat ky cung "SMOKE_OK").
     viewer = shutil.which("pyi-archive_viewer")
     if not viewer:
-        viewer = os.path.join(os.path.dirname(sys.executable), "pyi-archive_viewer")
-    if not os.path.exists(viewer):
-        print("  (bo qua buoc 2: khong co pyi-archive_viewer)")
-        tpl = os.path.join(SRC, "template.json")
-    else:
-        tmp = tempfile.mkdtemp()
-        p = subprocess.run([viewer, "-l", exe], capture_output=True, text=True)
-        if "template.json" not in p.stdout:
-            fail("template.json KHONG co trong goi dong goi")
-        # rut ra de doc that
-        q = subprocess.run([viewer, exe], input="x\ntemplate.json\ny\nX\ntemplate.json\nq\n",
-                           capture_output=True, text=True, cwd=tmp)
-        cand = [os.path.join(tmp, f) for f in os.listdir(tmp)]
-        cand = [c for c in cand if os.path.getsize(c) > 1000]
-        if not cand:
-            fail("khong rut duoc template.json ra de kiem tra")
-        tpl = sorted(cand, key=os.path.getsize)[-1]
-    data = json.load(open(tpl, encoding="utf-8"))
-    print("[2] template.json: %d cot, %d ngay, total_col=%s"
-          % (len(data["col_xf"]), len(data["day_columns"]), data["total_col"]))
-    assert len(data["day_columns"]) == 21, "so ngay sai"
+        cand_viewer = os.path.join(os.path.dirname(sys.executable), "pyi-archive_viewer")
+        viewer = cand_viewer if os.path.exists(cand_viewer) else None
+    if not viewer:
+        print("[2] KHONG KIEM DUOC: thieu pyi-archive_viewer")
+        print("    -> khong ket luan duoc goi co template.json hay khong.")
+        print("    -> cai pyinstaller (pip install pyinstaller) roi chay lai.")
+        print("KHONG DAT: kiem tra chua duoc thuc hien (khong phai SMOKE_OK)")
+        sys.exit(INSPECTION_SKIP)
 
-    # 3. nap khuon bang dung logic cua app
+    listing = subprocess.run([viewer, "-l", exe], capture_output=True, text=True)
+    if listing.returncode != 0:
+        fail("pyi-archive_viewer -l loi (exit %d): %s"
+             % (listing.returncode, (listing.stderr or "")[:300]))
+    if "template.json" not in listing.stdout:
+        fail("template.json KHONG co trong goi dong goi")
+
+    tmp = tempfile.mkdtemp()
+    subprocess.run([viewer, exe],
+                   input="x\ntemplate.json\ny\nX\ntemplate.json\nq\n",
+                   capture_output=True, text=True, cwd=tmp)
+    cand = [os.path.join(tmp, f) for f in os.listdir(tmp)]
+    cand = [c for c in cand if os.path.getsize(c) > 1000]
+    if not cand:
+        fail("khong rut duoc template.json ra de kiem tra")
+    tpl = sorted(cand, key=os.path.getsize)[-1]
+    data = json.load(open(tpl, encoding="utf-8"))
+    print("[2] template.json (rut tu goi): %d cot, %d ngay, total_col=%s"
+          % (len(data["col_xf"]), len(data["day_columns"]), data["total_col"]))
+    assert len(data["day_columns"]) == 21, "so ngay trong goi sai"
+
+    # 3) nap khuon bang dung logic cua app
     sys.path.insert(0, SRC)
     from _xlsio import Template
     tplobj = Template(tpl)
