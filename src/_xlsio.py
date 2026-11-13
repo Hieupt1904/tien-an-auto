@@ -136,7 +136,7 @@ class Template:
             pos += 4 + ln
         return out
 
-    def sheet_header_wide(self, min_width=9.0):
+    def sheet_header_wide(self, min_width=9.0, n_rows=None, n_cols=None):
         """sheet_header voi moi cot tu cot ngay tro di rong it nhat min_width (tranh ###)."""
         blob = self.sheet_header
         cols = self.column_widths()
@@ -152,8 +152,28 @@ class Template:
                 c0, c1, wd, xf = struct.unpack("<HHHH", bytes(body[:8]))
                 want = max(wd / 256.0, min_width) if c0 >= wide_from else wd / 256.0
                 struct.pack_into("<H", body, 4, int(round(want * 256)))
+            elif rid == DIMENSIONS and len(body) >= 14 and n_rows is not None:
+                struct.pack_into("<IIHHH", body, 0, 0, n_rows, 0, n_cols or 0, 0)
             out += rec(rid, bytes(body))
             pos += 4 + ln
+        return out
+
+    def sheet_header_dims(self, n_rows, n_cols):
+        """sheet_header voi DIMENSIONS cap nhat theo so dong/cot thuc te."""
+        blob = self.sheet_header
+        out = b""
+        pos = 0
+        seen = False
+        while pos + 4 <= len(blob):
+            rid, ln = struct.unpack("<HH", blob[pos:pos + 4])
+            body = bytearray(blob[pos + 4:pos + 4 + ln])
+            if rid == DIMENSIONS and len(body) >= 14:
+                struct.pack_into("<IIHHH", body, 0, 0, n_rows, 0, n_cols, 0)
+                seen = True
+            out += rec(rid, bytes(body))
+            pos += 4 + ln
+        if not seen:
+            out = rec(DIMENSIONS, struct.pack("<IIHHH", 0, n_rows, 0, n_cols, 0)) + out
         return out
 
     def globals_stream(self):
@@ -256,7 +276,14 @@ def _emit_mulblank(row, run):
 
 
 def _row_header(row, last_col, height=0x01B3):
-    return rec(ROW, struct.pack("<HHHHHHHH", row, 0, last_col, height, 0, 0, 0, 1))
+    """ROW record BIFF8: rw, colMic, colMac, miyRw, ...
+
+    colMac phai la so COT (khong phai chi so cot) tuc last_col + 1; va phai phu
+    moi o cua hang. Dat sai cho (vi du de 0) lam Excel bao
+    "File error: data may have been lost" du LibreOffice van mo duoc.
+    """
+    return rec(ROW, struct.pack("<HHHHHHHH", row, 0, max(last_col, 0) + 1,
+                                height, 0, 0, 0, 1))
 
 
 def _ranges_in_formula(cce):
@@ -454,10 +481,13 @@ def _total_formula_row(tpl, r, sources, xf, value, col):
 def build_stream(tpl, rows, freeze=True):
     """rows: [{'name': str, 'values': {col: value}}] -> stream BIFF8 day du."""
     max_col = tpl.max_col()
-    out = [tpl.globals_stream(), tpl.sheet_header_wide()]
     last_data = tpl.first_row + len(rows) - 1
     total_row = tpl.first_row + len(rows)
-    out.append(rec(DIMENSIONS, struct.pack("<IIHHH", 0, total_row + 1, 0, max_col + 1, 0)))
+    # sheet_header co san DIMENSIONS tu file mau: chi cap nhat so dong/cot trong
+    # chinh record do. Them mot DIMENSIONS thu hai se lam Excel bao
+    # "File error: data may have been lost".
+    out = [tpl.globals_stream(),
+           tpl.sheet_header_wide(n_rows=total_row + 1, n_cols=max_col + 1)]
     out.append(tpl.title_blob)
 
     tp = tpl.total_pair()
